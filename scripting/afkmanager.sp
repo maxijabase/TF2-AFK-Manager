@@ -4,8 +4,11 @@
 #include <sourcemod>
 #include <sdktools>
 #include <tf2>
+#include <autoexecconfig>
+#include "include/afkmanager"
 
-#define AFKM_VERSION "5.0.0"
+#define PLUGIN_VERSION "5.0.0"
+
 #define AFK_WARNING_INTERVAL 5
 #define AFK_CHECK_INTERVAL 1.0
 #define MAX_MESSAGE_LENGTH 250
@@ -16,69 +19,71 @@ enum {
   OBS_MODE_FREEZECAM
 }
 
-enum AFKImmunity: {
-  AFKImmunity_None, 
-  AFKImmunity_Kick, 
-  AFKImmunity_Full
-};
+AFKImmunity g_iPlayerImmunity[MAXPLAYERS + 1];
+char g_Prefix[16];
 
-enum {
-  CONVAR_VERSION, 
-  CONVAR_ENABLED, 
-  CONVAR_MOD_AFK, 
-  CONVAR_PREFIXSHORT, 
-  CONVAR_MINPLAYERSKICK, 
-  CONVAR_ADMINS_IMMUNE, 
-  CONVAR_TIMETOKICK, 
-  CONVAR_ARRAY_SIZE
-}
+int g_iPlayerUserID[MAXPLAYERS + 1];
+int g_iAFKTime[MAXPLAYERS + 1] = { -1, ... };
+int iButtons[MAXPLAYERS + 1];
+int g_iPlayerTeam[MAXPLAYERS + 1];
+int iObserverMode[MAXPLAYERS + 1] = { -1, ... };
+int iObserverTarget[MAXPLAYERS + 1] = { -1, ... };
+int g_iMapEndTime = -1;
+int g_iAdminsImmunue = -1;
+int g_iTimeToKick;
+int g_iSpec_Team = 1;
 
-AFKImmunity
-g_iPlayerImmunity[MAXPLAYERS + 1];
-char
-g_Prefix[16];
-int
-g_iPlayerUserID[MAXPLAYERS + 1]
-, g_iAFKTime[MAXPLAYERS + 1] = { -1, ... }
-, iButtons[MAXPLAYERS + 1]
-, g_iPlayerTeam[MAXPLAYERS + 1]
-, iObserverMode[MAXPLAYERS + 1] = { -1, ... }
-, iObserverTarget[MAXPLAYERS + 1] = { -1, ... }
-, g_iMapEndTime = -1
-, g_iAdminsImmunue = -1
-, g_iTimeToKick
-, g_iSpec_Team = 1;
-bool
-bPlayerAFK[MAXPLAYERS + 1] = { true, ... }
-, g_bEnabled
-, bKickPlayers;
-Handle
-g_hAFKTimer[MAXPLAYERS + 1];
-ConVar
-hCvarAFK
-, hCvarEnabled
-, hCvarPrefixShort
-, hCvarMinPlayersKick
-, hCvarAdminsImmune
-, hCvarAdminsFlag
-, hCvarKickPlayers
-, hCvarTimeToKick
-, hCvarWarnTimeToKick;
+bool bPlayerAFK[MAXPLAYERS + 1] = { true, ... };
+bool g_bEnabled;
+bool bKickPlayers;
 
-// Plugin Information
+Handle g_hAFKTimer[MAXPLAYERS + 1];
+
+ConVar hCvarIdleDealMethod;
+ConVar hCvarEnabled;
+ConVar hCvarPrefixShort;
+ConVar hCvarMinPlayersKick;
+ConVar hCvarAdminsImmune;
+ConVar hCvarAdminsFlag;
+ConVar hCvarKickPlayers;
+ConVar hCvarTimeToKick;
+ConVar hCvarWarnTimeToKick;
+
+GlobalForward g_OnInitializePlayer;
+GlobalForward g_OnAFKKick;
+GlobalForward g_OnClientAFK;
+GlobalForward g_OnClientBack;
+
 public Plugin myinfo = {
   name = "[TF2] AFK Manager", 
-  author = "Rothgar, JoinedSenses", 
-  description = "Takes action on AFK players", 
-  version = AFKM_VERSION, 
-  url = "http://www.dawgclan.net"
+  author = "ampere, original by Rothgar", 
+  description = "Takes action on AFK players.", 
+  version = PLUGIN_VERSION, 
+  url = "http://github.com/maxijabase"
 };
 
-public void OnPluginStart() {
-  LoadTranslations("common.phrases");
-  LoadTranslations("afk_manager.phrases");
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
+{
+  RegPluginLibrary("afkmanager");
   
-  CreateConVar("sm_afkm_version", AFKM_VERSION, "Current version of the AFK Manager", FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY | FCVAR_DONTRECORD);
+  CreateNative("AFKM_SetClientImmunity", Native_SetClientImmunity);
+  CreateNative("AFKM_GetSpectatorTeam", Native_GetSpectatorTeam);
+  CreateNative("AFKM_IsClientAFK", Native_IsClientAFK);
+  CreateNative("AFKM_GetClientAFKTime", Native_GetClientAFKTime);
+  
+  g_OnInitializePlayer = new GlobalForward("AFKM_OnInitializePlayer", ET_Event, Param_Cell);
+  g_OnAFKKick = new GlobalForward("AFKM_OnAFKKick", ET_Event, Param_Cell);
+  g_OnClientAFK = new GlobalForward("AFKM_OnClientAFK", ET_Ignore, Param_Cell);
+  g_OnClientBack = new GlobalForward("AFKM_OnClientBack", ET_Ignore, Param_Cell);
+  
+  return APLRes_Success;
+}
+
+public void OnPluginStart() {
+  AutoExecConfig_SetCreateFile(true);
+  AutoExecConfig_SetFile("afkmanager");
+  
+  CreateConVar("sm_afk_version", PLUGIN_VERSION, "Current version of the AFK Manager", FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY | FCVAR_DONTRECORD);
   hCvarEnabled = CreateConVar("sm_afk_enable", "1", "Is the AFK Manager enabled or disabled? [0 = FALSE, 1 = TRUE, DEFAULT: 1]", FCVAR_NONE, true, 0.0, true, 1.0);
   hCvarPrefixShort = CreateConVar("sm_afk_prefix_short", "0", "Should the AFK Manager use a short prefix? [0 = FALSE, 1 = TRUE, DEFAULT: 0]", FCVAR_NONE, true, 0.0, true, 1.0);
   hCvarMinPlayersKick = CreateConVar("sm_afk_kick_min_players", "6", "Minimum number of connected clients required for AFK kick to be enabled. [DEFAULT: 6]");
@@ -87,10 +92,13 @@ public void OnPluginStart() {
   hCvarKickPlayers = CreateConVar("sm_afk_kick_players", "1", "Should the AFK Manager kick AFK clients? [0 = DISABLED, 1 = KICK ALL, 2 = ALL EXCEPT SPECTATORS, 3 = SPECTATORS ONLY]");
   hCvarTimeToKick = CreateConVar("sm_afk_kick_time", "120.0", "Time in seconds (total) client must be AFK before being kicked. [0 = DISABLED, DEFAULT: 120.0 seconds]");
   hCvarWarnTimeToKick = CreateConVar("sm_afk_kick_warn_time", "30.0", "Time in seconds remaining, player should be warned before being kicked for AFK. [DEFAULT: 30.0 seconds]");
-  hCvarAFK = FindConVar("mp_idledealmethod");
+  hCvarIdleDealMethod = FindConVar("mp_idledealmethod");
+  
+  AutoExecConfig_CleanFile();
+  AutoExecConfig_ExecuteFile();
   
   hCvarEnabled.AddChangeHook(CvarChange_Status);
-  hCvarAFK.AddChangeHook(CvarChange_Status);
+  hCvarIdleDealMethod.AddChangeHook(CvarChange_Status);
   hCvarPrefixShort.AddChangeHook(CvarChange_Status);
   hCvarAdminsImmune.AddChangeHook(CvarChange_Status);
   hCvarTimeToKick.AddChangeHook(CvarChange_Status);
@@ -98,20 +106,22 @@ public void OnPluginStart() {
   g_Prefix = hCvarPrefixShort.BoolValue ? "AFK" : "AFK Manager";
   g_iAdminsImmunue = hCvarAdminsImmune.IntValue;
   g_iTimeToKick = hCvarTimeToKick.IntValue;
-  hCvarAFK.SetInt(0);
   
-  HookEvent("player_disconnect", Event_PlayerDisconnectPost, EventHookMode_Post);
+  hCvarIdleDealMethod.SetInt(0);
+  
+  HookEvent("player_disconnect", Event_PlayerDisconnectPost);
   HookEvent("player_team", Event_PlayerTeam);
   HookEvent("player_spawn", Event_PlayerSpawn);
-  HookEvent("player_death", Event_PlayerDeathPost, EventHookMode_Post);
-  AutoExecConfig(true, "afk_manager");
+  HookEvent("player_death", Event_PlayerDeathPost);
+  
+  LoadTranslations("common.phrases");
+  LoadTranslations("afkmanager.phrases");
 }
 
 public void OnMapStart() {
   if (!g_bEnabled) {
     return;
   }
-  AutoExecConfig(true, "afk_manager");
   if (g_iMapEndTime == -1) {
     return;
   }
@@ -143,17 +153,22 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
   if (!g_bEnabled || !IsClientConnected(client) || IsFakeClient(client) || g_hAFKTimer[client] == null) {
     return Plugin_Continue;
   }
+
   if (cmdnum <= 0) {
     return Plugin_Handled;
   }
+
   if (mouse[0] != 0 || mouse[1] != 0) {
     iButtons[client] = buttons;
     bPlayerAFK[client] = false;
+    Forward_OnClientBack(client);
     return Plugin_Continue;
   }
+
   if (iButtons[client] == buttons) {
     return Plugin_Continue;
   }
+
   if (IsClientObserver(client)) {
     if (iObserverMode[client] == -1) {
       iButtons[client] = buttons;
@@ -166,8 +181,10 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
       return Plugin_Continue;
     }
   }
+  
   iButtons[client] = buttons;
   bPlayerAFK[client] = false;
+  Forward_OnClientBack(client);
   return Plugin_Continue;
 }
 
@@ -245,21 +262,31 @@ public Action Event_PlayerDeathPost(Event event, const char[] name, bool dontBro
   return Plugin_Continue;
 }
 
-Action Timer_CheckPlayer(Handle Timer, int client) {
+Action Timer_CheckPlayer(Handle timer, int client) {
+  // Check if plugin is enabled, if not stop the timer
   if (!g_bEnabled) {
     return Plugin_Stop;
   }
+
+  // If client is not in game or frozen, increment AFK time and continue
   if (!IsClientInGame(client) || (GetEntityFlags(client) & FL_FROZEN)) {
     g_iAFKTime[client]++;
     return Plugin_Continue;
   }
+
+  // Handle observer mode changes and targets
   if (IsClientObserver(client)) {
     int m_iObserverMode = GetEntProp(client, Prop_Send, "m_iObserverMode");
+
+    // Initialize observer mode if not set
     if (iObserverMode[client] == -1) {
       iObserverMode[client] = m_iObserverMode;
       return Plugin_Continue;
     }
+
+    // Handle observer mode changes
     if (iObserverMode[client] != m_iObserverMode) {
+      // Handle death cam mode change
       if (iObserverMode[client] == OBS_MODE_DEATHCAM) {
         iObserverMode[client] = m_iObserverMode;
         if (iObserverMode[client] != 7) {
@@ -267,6 +294,7 @@ Action Timer_CheckPlayer(Handle Timer, int client) {
         }
         return Plugin_Continue;
       }
+      // Handle freeze cam mode change
       else if (iObserverMode[client] == OBS_MODE_FREEZECAM) {
         iObserverMode[client] = m_iObserverMode;
         if (iObserverMode[client] != 7) {
@@ -274,6 +302,8 @@ Action Timer_CheckPlayer(Handle Timer, int client) {
         }
         return Plugin_Continue;
       }
+
+      // Update observer mode and target
       iObserverMode[client] = m_iObserverMode;
       if (iObserverMode[client] != 7) {
         int m_hObserverTarget = GetEntPropEnt(client, Prop_Send, "m_hObserverTarget");
@@ -286,6 +316,8 @@ Action Timer_CheckPlayer(Handle Timer, int client) {
       SetClientAFK(client);
       return Plugin_Continue;
     }
+
+    // Check for observer target changes
     if (iObserverMode[client] != 7) {
       int m_hObserverTarget = GetEntPropEnt(client, Prop_Send, "m_hObserverTarget");
       if (iObserverTarget[client] != m_hObserverTarget) {
@@ -298,25 +330,34 @@ Action Timer_CheckPlayer(Handle Timer, int client) {
       }
     }
   }
+
+  // Get current time
   int Time = GetTime();
+
+  // Reset AFK status if player is not AFK
   if (!bPlayerAFK[client]) {
     SetClientAFK(client, (!IsPlayerAlive(client) && iObserverTarget[client] == client) ? false : true);
     return Plugin_Continue;
   }
+
+  // If kicking is disabled, just increment AFK time
   if (!bKickPlayers) {
     g_iAFKTime[client]++;
     return Plugin_Continue;
   }
-  int
-  AFKTime = (g_iAFKTime[client] >= 0) ? (Time - g_iAFKTime[client]) : 0
-  , iKickPlayers = hCvarKickPlayers.IntValue;
+
+  // Calculate AFK time and check kick settings
+  int AFKTime = (g_iAFKTime[client] >= 0) ? (Time - g_iAFKTime[client]) : 0;
+  int iKickPlayers = hCvarKickPlayers.IntValue;
   
   if (iKickPlayers <= 0) {
     return Plugin_Continue;
   }
+
+  // Check if player should be kicked or warned
   int AFKKickTimeleft = g_iTimeToKick - AFKTime;
-  if (AFKKickTimeleft < 0 || AFKTime >= g_iTimeToKick) {
-    return KickAFKClient(client);
+  if ((AFKKickTimeleft < 0 || AFKTime >= g_iTimeToKick) && Forward_OnAFKKick(client) == Plugin_Continue) {
+    KickAFKClient(client);
   }
   else if (AFKTime % AFK_WARNING_INTERVAL == 0 && (g_iTimeToKick - AFKTime) <= hCvarWarnTimeToKick.IntValue) {
     PrintToChat(client, "%t", "Kick_Warning", AFKKickTimeleft);
@@ -324,12 +365,8 @@ Action Timer_CheckPlayer(Handle Timer, int client) {
   return Plugin_Continue;
 }
 
-Action KickAFKClient(int client) {
-  char clientName[MAX_NAME_LENGTH];
-  GetClientName(client, clientName, sizeof(clientName));
+void KickAFKClient(int client) {
   KickClient(client, "[%s] %t", g_Prefix, "Kick_Message");
-  PrintToChatAll("%t", "Kick_Announce", clientName);
-  return Plugin_Handled;
 }
 
 void SetPlayerImmunity(int client, int type, bool AFKImmunityType = false) {
@@ -390,6 +427,7 @@ void SetClientAFK(int client, bool Reset = true) {
   }
   else {
     bPlayerAFK[client] = true;
+    Forward_OnClientAFK(client);
   }
 }
 
@@ -405,6 +443,11 @@ void InitializePlayer(int index) {
   if (!IsValidClient(index)) {
     return;
   }
+
+  if (Forward_OnInitializePlayer(index) != Plugin_Continue) {
+    return;
+  }
+
   int iClientUserID = GetClientUserId(index);
   if (iClientUserID != g_iPlayerUserID[index]) {
     ResetAFKTimer(index);
@@ -444,7 +487,7 @@ void CvarChange_Status(ConVar cvar, const char[] oldvalue, const char[] newvalue
   else if (cvar == hCvarPrefixShort) {
     g_Prefix = hCvarPrefixShort.BoolValue ? "AFK" : "AFK Manager";
   }
-  else if (cvar == hCvarAFK && StringToInt(newvalue) != 0) {
+  else if (cvar == hCvarIdleDealMethod && StringToInt(newvalue) != 0) {
     cvar.SetInt(0);
   }
 }
@@ -487,4 +530,84 @@ bool CheckAdminImmunity(int client) {
     return (StrEqual(sFlags, "") || (iUserFlagBits & (ReadFlagString(sFlags) | ADMFLAG_ROOT) > 0));
   }
   return false;
+}
+
+any Native_SetClientImmunity(Handle plugin, int numParams) {
+  int iClient = GetNativeCell(1);
+  AFKImmunity iImmunityType = GetNativeCell(2);
+  
+  if (iClient < 1 || iClient > MaxClients) {
+    ThrowNativeError(SP_ERROR_NATIVE, "Invalid client index (%d)", iClient);
+  }
+  
+  if (iImmunityType < AFKImmunity_None || iImmunityType > AFKImmunity_Full) {
+    ThrowNativeError(SP_ERROR_NATIVE, "Invalid Immunity Type (%d)", iImmunityType);
+  }
+  
+  SetPlayerImmunity(iClient, view_as<int>(iImmunityType), true);
+  return true;
+}
+
+any Native_GetSpectatorTeam(Handle plugin, int numParams) {
+  return g_iSpec_Team;
+}
+
+any Native_IsClientAFK(Handle plugin, int numParams) {
+  int client = GetNativeCell(1);
+  
+  if (client < 1 || client > MaxClients) {
+    ThrowNativeError(SP_ERROR_NATIVE, "Invalid client index (%d)", client);
+  }
+  
+  return bPlayerAFK[client];
+}
+
+any Native_GetClientAFKTime(Handle plugin, int numParams) {
+  int client = GetNativeCell(1);
+  
+  if (client < 1 || client > MaxClients) {
+    ThrowNativeError(SP_ERROR_NATIVE, "Invalid client index (%d)", client);
+  }
+  
+  if (g_iAFKTime[client] == -1) {
+    return g_iAFKTime[client];
+  }
+  
+  return (GetTime() - g_iAFKTime[client]);
+} 
+
+Action Forward_OnInitializePlayer(int client)
+{
+	Action result = Plugin_Continue;
+
+	Call_StartForward(g_OnInitializePlayer);
+	Call_PushCell(client);
+	Call_Finish(result);
+
+	return result;
+}
+
+Action Forward_OnAFKKick(int client)
+{
+  Action result = Plugin_Continue;
+
+  Call_StartForward(g_OnAFKKick);
+  Call_PushCell(client);
+  Call_Finish(result);
+
+  return result;
+}
+
+void Forward_OnClientAFK(int client)
+{
+  Call_StartForward(g_OnClientAFK);
+  Call_PushCell(client);
+  Call_Finish();
+}
+
+void Forward_OnClientBack(int client)
+{
+  Call_StartForward(g_OnClientBack);
+  Call_PushCell(client);
+  Call_Finish();
 } 
