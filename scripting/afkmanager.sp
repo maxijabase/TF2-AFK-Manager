@@ -45,7 +45,6 @@ ConVar hCvarPrefixShort;
 ConVar hCvarMinPlayersKick;
 ConVar hCvarAdminsImmune;
 ConVar hCvarAdminsFlag;
-ConVar hCvarKickPlayers;
 ConVar hCvarTimeToKick;
 ConVar hCvarWarnTimeToKick;
 
@@ -89,7 +88,6 @@ public void OnPluginStart() {
   hCvarMinPlayersKick = CreateConVar("sm_afk_kick_min_players", "6", "Minimum number of connected clients required for AFK kick to be enabled. [DEFAULT: 6]");
   hCvarAdminsImmune = CreateConVar("sm_afk_admins_immune", "1", "Should admins be immune to the AFK Manager? [0 = DISABLED, 1 = COMPLETE IMMUNITY, 2 = KICK IMMUNITY");
   hCvarAdminsFlag = CreateConVar("sm_afk_admins_flag", "", "Admin Flag for immunity? Leave Blank for any flag.");
-  hCvarKickPlayers = CreateConVar("sm_afk_kick_players", "1", "Should the AFK Manager kick AFK clients? [0 = DISABLED, 1 = KICK ALL, 2 = ALL EXCEPT SPECTATORS, 3 = SPECTATORS ONLY]");
   hCvarTimeToKick = CreateConVar("sm_afk_kick_time", "120.0", "Time in seconds (total) client must be AFK before being kicked. [0 = DISABLED, DEFAULT: 120.0 seconds]");
   hCvarWarnTimeToKick = CreateConVar("sm_afk_kick_warn_time", "30.0", "Time in seconds remaining, player should be warned before being kicked for AFK. [DEFAULT: 30.0 seconds]");
   hCvarIdleDealMethod = FindConVar("mp_idledealmethod");
@@ -348,11 +346,6 @@ Action Timer_CheckPlayer(Handle timer, int client) {
 
   // Calculate AFK time and check kick settings
   int AFKTime = (g_iAFKTime[client] >= 0) ? (Time - g_iAFKTime[client]) : 0;
-  int iKickPlayers = hCvarKickPlayers.IntValue;
-  
-  if (iKickPlayers <= 0) {
-    return Plugin_Continue;
-  }
 
   // Check if player should be kicked or warned
   int AFKKickTimeleft = g_iTimeToKick - AFKTime;
