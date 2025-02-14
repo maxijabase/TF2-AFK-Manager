@@ -1,6 +1,8 @@
 # TF2 AFK Manager
 
-A fully featured AFK (Away From Keyboard) management system for Team Fortress 2 servers.
+An AFK management system for Team Fortress 2 servers.
+Original plugin by Rothgar, adjustments by JoinedSenses.
+This version includes forwards, natives, and further code cleanup.
 
 ## Features
 
@@ -23,14 +25,4 @@ A fully featured AFK (Away From Keyboard) management system for Team Fortress 2 
 
 ## API
 
-The plugin provides natives and forwards for other plugins to interact with the AFK system:
-
-```sourcepawn
-forward Action AFKM_OnInitializePlayer(int client);
-forward Action AFKM_OnAFKKick(int client);
-forward void AFKM_OnClientAFK(int client);
-forward void AFKM_OnClientBack(int client);
-```
-
-### Natives
-
+Check `scripting/include/afkmanager.inc`
