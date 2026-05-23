@@ -7,7 +7,7 @@
 #include <autoexecconfig>
 #include "include/afk_manager"
 
-#define PLUGIN_VERSION "6.0"
+#define PLUGIN_VERSION "6.1"
 
 float g_fCheckInterval;
 
@@ -91,6 +91,8 @@ public void OnPluginStart() {
   
   g_fCheckInterval = hCvarCheckInterval.FloatValue;
   g_iAdminsImmune = hCvarAdminsImmune.IntValue;
+  if (hCvarEnabled.BoolValue)
+    EnablePlugin();
   
   hCvarIdleDealMethod.SetInt(0);
   
@@ -456,7 +458,7 @@ void DisablePlugin() {
 }
 
 bool IsValidClient(int client) {
-  return (IsClientInGame(client) && (0 < client <= MaxClients) && !IsFakeClient(client));
+  return (0 < client <= MaxClients) && IsClientInGame(client) && !IsFakeClient(client);
 }
 
 bool CheckAdminImmunity(int client) {
